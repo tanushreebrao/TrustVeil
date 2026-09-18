@@ -20,7 +20,7 @@ CORS(
     allow_headers=["Content-Type"]
 )
 
-SANA_API_URL = "https://building-cemetery-russia-citations.trycloudflare.com/analyze"
+SANA_API_URL = os.getenv("SANA_API_URL")
 
 
 @app.route("/")
