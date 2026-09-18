@@ -13,7 +13,7 @@ CORS(
     app,
     resources={
         r"/analyze": {
-            "origins": "chrome-extension://kkgokdleapgndbfkaecnebceokciokio"
+            "origins": "chrome-extension://kkgodlkeaepdngnbfkaecnebceocikio"
         }
     },
     methods=["POST", "OPTIONS"],
