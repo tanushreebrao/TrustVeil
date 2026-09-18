@@ -1,0 +1,8 @@
+{
+    "url": "https://example.com/",
+    "https": true,
+    "permissions": ["camera", "location"],
+    "page_text": "Congratulations! You have won...",
+    "login_required": false,
+    "payment_information_requested": false
+}
