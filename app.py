@@ -218,6 +218,8 @@ def analyze():
     data["domain_age_days"] = domain_age_days
     data["safe_browsing"] = safe_browsing
     data["ssl_status"] = ssl_status
+    data["domain"] = domain
+    data["page_content"] = data.get("page_text", "")
 
     ai_result = send_to_ai(data)
 
