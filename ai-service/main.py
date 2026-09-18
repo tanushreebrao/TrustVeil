@@ -1,353 +1,1002 @@
 import os
 import json
+import uuid
+import logging
+from typing import List
+from datetime import datetime
+from xml.sax.saxutils import escape
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
-from openai import OpenAI
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
+from openai import OpenAI
+
+from reportlab.lib.pagesizes import A4
+from reportlab.platypus import (
+    SimpleDocTemplate,
+    Paragraph,
+    Spacer,
+    Table,
+    TableStyle
+)
+from reportlab.lib import colors
+from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.lib.enums import TA_CENTER
+from reportlab.lib.units import mm
 
 
-# Load environment variables
+logger = logging.getLogger(__name__)
+
+
+# ==================================================
+# ENVIRONMENT
+# ==================================================
+
 load_dotenv()
 
-
-# Create FastAPI application
-app = FastAPI(title="TrustVeil AI Service")
-
-
-# Load OpenAI API key
 api_key = os.getenv("OPENAI_API_KEY")
 
 if not api_key:
-    raise RuntimeError("OPENAI_API_KEY is not configured")
+    raise RuntimeError("OPENAI_API_KEY not found in .env file")
+
+client = OpenAI(
+    api_key=api_key,
+    timeout=30.0,
+    max_retries=0
+)
 
 
-# Create OpenAI client
-client = OpenAI(api_key=api_key)
+# ==================================================
+# FASTAPI APP
+# ==================================================
+
+app = FastAPI(
+    title="TrustVeil AI Service",
+    description="AI-powered website trust analysis service",
+    version="1.0.0"
+)
 
 
-# Data received from the TrustVeil backend
-class AnalyzeRequest(BaseModel):
-    url: str | None = None
-    domain: str | None = None
-    domain_age_days: int | None = None
-    safe_browsing: str | None = None
-    ssl_status: str | None = None
-    permissions: list[str] | None = None
-    page_content: str | None = None
+# ==================================================
+# INPUT MODEL
+# ==================================================
+
+class WebsiteData(BaseModel):
+    url: str
+    domain: str
+    domain_age_days: int
+    safe_browsing: str
+    ssl_status: str
+    permissions: List[str]
+    page_content: str
 
 
-# Calculate a deterministic baseline score
-def calculate_base_score(data):
-    score = 0
-    evidence_count = 0
-    maximum_possible_score = 0
+# ==================================================
+# OUTPUT MODEL
+# ==================================================
 
-    # Safe Browsing
-    if data.safe_browsing:
-        evidence_count += 1
-        maximum_possible_score += 40
-
-        status = data.safe_browsing.upper()
-
-        if status == "SAFE":
-            score += 40
-
-        elif status == "UNSAFE":
-            score -= 40
-
-    # SSL
-    if data.ssl_status:
-        evidence_count += 1
-        maximum_possible_score += 25
-
-        status = data.ssl_status.upper()
-
-        if status == "VALID":
-            score += 25
-
-        elif status == "INVALID":
-            score -= 25
-
-    # Domain age
-    if data.domain_age_days is not None:
-        evidence_count += 1
-        maximum_possible_score += 15
-
-        if data.domain_age_days >= 365:
-            score += 15
-
-        elif data.domain_age_days < 30:
-            score -= 10
-
-    # Permissions
-    if data.permissions is not None:
-        evidence_count += 1
-        maximum_possible_score += 10
-
-        if len(data.permissions) == 0:
-            score += 10
-
-        elif len(data.permissions) >= 3:
-            score -= 10
-
-    # Page content
-    if data.page_content:
-        evidence_count += 1
-        maximum_possible_score += 10
-
-        content = data.page_content.lower()
-
-        suspicious_terms = [
-            "enter your bank details",
-            "claim your prize",
-            "you have won",
-            "send money",
-            "verify your account"
-        ]
-
-        if any(term in content for term in suspicious_terms):
-            score -= 10
-        else:
-            score += 10
-
-    # No security evidence available
-    if maximum_possible_score == 0:
-        return 50, 0
-
-    # Convert the evidence score into a 0–100 range
-    normalized_score = (
-        50 + (score / maximum_possible_score) * 50
-    )
-
-    normalized_score = round(
-        max(0, min(100, normalized_score))
-    )
-
-    # Keep the score aligned with TrustVeil risk bands
-    if 71 <= normalized_score <= 89:
-        if normalized_score >= 80:
-            normalized_score = 70
-        else:
-            normalized_score = 40
-
-    return normalized_score, evidence_count
+class TrustAnalysis(BaseModel):
+    score: int
+    risk_level: str
+    confidence: str
+    reason: str
+    warning_signals: List[str]
+    positive_signals: List[str]
+    recommendation: str
 
 
-# Instructions given to the AI
-SYSTEM_PROMPT = """
-You are the AI analysis engine for TrustVeil.
-
-TrustVeil receives security information collected by its backend.
-Your job is to interpret those signals and produce a trust analysis.
-
-Rules:
-
-1. Only use information supplied in the input.
-2. Never invent security evidence.
-3. Never claim that you personally performed WHOIS, SSL,
-   Safe Browsing, permission, or internet checks.
-4. If information is missing, treat it as unavailable.
-5. Missing information must reduce confidence, not automatically
-   be treated as a warning signal.
-6. Consider both positive and warning signals.
-7. Do not classify a website as dangerous only because
-   its domain is new.
-8. Give an evidence-based explanation.
-9. A URL using HTTPS does not by itself prove that the SSL
-   certificate is valid. Use ssl_status when available.
-10. Use the supplied deterministic baseline score as the
-    starting point.
-11. Do not arbitrarily invent a completely different score.
-12. Return only the requested JSON structure.
-
-Risk categories:
-
-LOW:
-score 90 or above
-
-MEDIUM:
-score 40 through 70
-
-HIGH:
-score below 40
-
-Confidence:
-
-HIGH confidence requires several meaningful security signals.
-
-MEDIUM confidence means some useful security evidence is available
-but important signals are missing.
-
-LOW confidence means very little security evidence is available.
-"""
+def pdf_text(value):
+    """Escape dynamic text before placing it in a ReportLab Paragraph."""
+    return escape(str(value))
 
 
-# Required TrustVeil AI response structure
-OUTPUT_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "score": {
-            "type": "integer",
-            "minimum": 0,
-            "maximum": 100
-        },
-        "risk_level": {
-            "type": "string",
-            "enum": ["LOW", "MEDIUM", "HIGH"]
-        },
-        "confidence": {
-            "type": "string",
-            "enum": ["LOW", "MEDIUM", "HIGH"]
-        },
-        "reason": {
-            "type": "string"
-        },
-        "warning_signals": {
-            "type": "array",
-            "items": {
-                "type": "string"
-            }
-        },
-        "positive_signals": {
-            "type": "array",
-            "items": {
-                "type": "string"
-            }
-        },
-        "recommendation": {
-            "type": "string"
-        }
-    },
-    "required": [
-        "score",
-        "risk_level",
-        "confidence",
-        "reason",
-        "warning_signals",
-        "positive_signals",
-        "recommendation"
-    ],
-    "additionalProperties": False
-}
+# ==================================================
+# DETERMINISTIC TRUST SCORE
+# ==================================================
 
+def calculate_score(data: WebsiteData):
 
-# Basic service check
-@app.get("/")
-def root():
-    return {
-        "message": "TrustVeil AI Service is running"
-    }
+    score = 50
 
+    warning_signals = []
+    positive_signals = []
 
-# Health check
-@app.get("/health")
-def health():
-    return {
-        "status": "healthy"
-    }
+    # --------------------------------------------------
+    # SAFE BROWSING
+    # --------------------------------------------------
 
+    if data.safe_browsing.upper() == "SAFE":
 
-# Main AI analysis endpoint
-@app.post("/analyze")
-def analyze(data: AnalyzeRequest):
+        score += 30
 
-    # Convert incoming request into a dictionary
-    input_data = data.model_dump(exclude_none=True)
-
-    # Don't process an empty request
-    if not input_data:
-        raise HTTPException(
-            status_code=400,
-            detail="No security signals were provided"
+        positive_signals.append(
+            "Safe Browsing did not flag the website."
         )
 
-    # Calculate deterministic baseline score
-    base_score, evidence_count = calculate_base_score(data)
+    elif data.safe_browsing.upper() == "UNSAFE":
 
-    # Prompt containing the backend's security information
-    user_prompt = f"""
-Analyze the following website security information.
+        score -= 40
 
-INPUT:
+        warning_signals.append(
+            "Safe Browsing flagged the website as unsafe."
+        )
 
-{json.dumps(input_data, indent=2)}
+    # --------------------------------------------------
+    # SSL
+    # --------------------------------------------------
 
-DETERMINISTIC BASELINE SCORE:
+    if data.ssl_status.upper() == "VALID":
 
-{base_score}
+        score += 20
 
-NUMBER OF AVAILABLE SECURITY SIGNALS:
+        positive_signals.append(
+            "The website has a valid SSL/TLS certificate."
+        )
 
-{evidence_count}
+    elif data.ssl_status.upper() == "INVALID":
 
-Use the deterministic baseline score as the starting point.
+        score -= 30
 
-The final score must remain exactly equal to the deterministic
-baseline score.
+        warning_signals.append(
+            "The website has an invalid SSL/TLS certificate."
+        )
 
-Do not adjust, increase, decrease, or invent a different score.
+    # --------------------------------------------------
+    # DOMAIN AGE
+    # --------------------------------------------------
 
-Interpret the supplied evidence and explain the result.
+    if data.domain_age_days >= 365:
 
-Do not invent missing security information.
+        score += 15
 
-If important security signals are unavailable, reflect that
-primarily through the confidence level and explanation.
+        positive_signals.append(
+            f"The domain has existed for {data.domain_age_days} days."
+        )
 
-Make sure the reason is consistent with the final score.
+    elif data.domain_age_days < 30:
 
-Return the TrustVeil analysis using the required JSON schema.
+        score -= 10
+
+        warning_signals.append(
+            f"The domain is very new ({data.domain_age_days} days old)."
+        )
+
+    else:
+
+        score += 5
+
+    # --------------------------------------------------
+    # PERMISSIONS
+    # --------------------------------------------------
+
+    permission_count = len(data.permissions)
+
+    if permission_count == 0:
+
+        score += 10
+
+        positive_signals.append(
+            "The website requested no browser permissions."
+        )
+
+    elif permission_count >= 3:
+
+        score -= 10
+
+        warning_signals.append(
+            f"The website requested {permission_count} browser permissions."
+        )
+
+    # --------------------------------------------------
+    # PAGE CONTENT
+    # --------------------------------------------------
+
+    suspicious_patterns = {
+
+        "bank details":
+            "The page asks for bank details.",
+
+        "credit card":
+            "The page asks for credit card information.",
+
+        "password":
+            "The page asks for a password.",
+
+        "verify your account":
+            "The page asks the user to verify an account.",
+
+        "urgent action":
+            "The page uses urgent-action language.",
+
+        "you have won":
+            "The page claims that the user has won something.",
+
+        "prize":
+            "The page contains prize-related language.",
+
+        "claim your":
+            "The page asks the user to claim something.",
+
+        "login":
+            "The page contains login-related language."
+    }
+
+    page_text = data.page_content.lower()
+
+    content_warning_count = 0
+
+    for pattern, message in suspicious_patterns.items():
+
+        if pattern in page_text:
+
+            warning_signals.append(message)
+
+            content_warning_count += 1
+
+    # Maximum page-content penalty = 25
+
+    score -= min(
+        content_warning_count * 5,
+        25
+    )
+
+    # --------------------------------------------------
+    # SCORE LIMIT
+    # --------------------------------------------------
+
+    score = max(
+        0,
+        min(100, score)
+    )
+
+    # --------------------------------------------------
+    # RISK LEVEL
+    # --------------------------------------------------
+
+    if score >= 75:
+
+        risk_level = "LOW"
+
+    elif score >= 40:
+
+        risk_level = "MEDIUM"
+
+    else:
+
+        risk_level = "HIGH"
+
+    # --------------------------------------------------
+    # CONFIDENCE
+    # --------------------------------------------------
+
+    evidence_count = 0
+
+    if data.safe_browsing.upper() in ["SAFE", "UNSAFE"]:
+        evidence_count += 1
+
+    if data.ssl_status.upper() in ["VALID", "INVALID"]:
+        evidence_count += 1
+
+    if data.domain_age_days >= 0:
+        evidence_count += 1
+
+    if data.permissions is not None:
+        evidence_count += 1
+
+    if data.page_content.strip():
+        evidence_count += 1
+
+    if evidence_count >= 4:
+
+        confidence = "HIGH"
+
+    elif evidence_count >= 2:
+
+        confidence = "MEDIUM"
+
+    else:
+
+        confidence = "LOW"
+
+    return (
+        score,
+        risk_level,
+        confidence,
+        warning_signals,
+        positive_signals
+    )
+
+
+# ==================================================
+# AI EXPLANATION
+# ==================================================
+
+def generate_ai_explanation(
+    data: WebsiteData,
+    score: int,
+    risk_level: str
+):
+
+    prompt = f"""
+You are the explanation engine for TrustVeil.
+
+TrustVeil analyzes websites using security evidence collected
+by other components of the system.
+
+Your job is ONLY to interpret the supplied evidence.
+
+IMPORTANT RULES:
+
+1. Use ONLY the supplied evidence.
+2. Do NOT perform internet searches.
+3. Do NOT invent security information.
+4. Do NOT invent security checks.
+5. Do NOT change the deterministic score.
+6. Do NOT change the deterministic risk level.
+7. A new domain is NOT automatically malicious.
+8. HTTPS or SSL alone does NOT prove that a website is trustworthy.
+9. Explain technical signals in simple language.
+10. Do not exaggerate the evidence.
+11. Mention the most important positive and negative signals.
+12. Give a practical recommendation to the user.
+
+SUPPLIED EVIDENCE
+
+URL:
+{data.url}
+
+DOMAIN:
+{data.domain}
+
+DOMAIN AGE:
+{data.domain_age_days} days
+
+SAFE BROWSING:
+{data.safe_browsing}
+
+SSL STATUS:
+{data.ssl_status}
+
+PERMISSIONS:
+{data.permissions}
+
+PAGE CONTENT:
+{data.page_content}
+
+DETERMINISTIC TRUSTVEIL RESULT
+
+SCORE:
+{score}/100
+
+RISK LEVEL:
+{risk_level}
+
+Return JSON containing:
+
+reason:
+A concise explanation of the result.
+
+warning_signals:
+Important warning signs supported by the evidence.
+
+positive_signals:
+Important positive signals supported by the evidence.
+
+recommendation:
+A practical recommendation for the user.
+
+The deterministic score and risk level are authoritative.
 """
 
     try:
 
         response = client.responses.create(
+
             model="gpt-5.6-luna",
-            input=[
-                {
-                    "role": "system",
-                    "content": SYSTEM_PROMPT
-                },
-                {
-                    "role": "user",
-                    "content": user_prompt
-                }
-            ],
+
+            input=prompt,
+
             text={
                 "format": {
+
                     "type": "json_schema",
+
                     "name": "trust_analysis",
-                    "strict": True,
-                    "schema": OUTPUT_SCHEMA
+
+                    "schema": {
+
+                        "type": "object",
+
+                        "properties": {
+
+                            "reason": {
+                                "type": "string"
+                            },
+
+                            "warning_signals": {
+
+                                "type": "array",
+
+                                "items": {
+                                    "type": "string"
+                                }
+                            },
+
+                            "positive_signals": {
+
+                                "type": "array",
+
+                                "items": {
+                                    "type": "string"
+                                }
+                            },
+
+                            "recommendation": {
+                                "type": "string"
+                            }
+                        },
+
+                        "required": [
+                            "reason",
+                            "warning_signals",
+                            "positive_signals",
+                            "recommendation"
+                        ],
+
+                        "additionalProperties": False
+                    },
+
+                    "strict": True
                 }
             }
         )
 
-        # Convert AI JSON response into Python dictionary
-        result = json.loads(response.output_text)
+        return response.output_text
 
-        # Keep our deterministic score as the final score
-        result["score"] = base_score
-
-        # Keep risk level consistent with the final score
-        if base_score >= 90:
-            result["risk_level"] = "LOW"
-
-        elif base_score < 40:
-            result["risk_level"] = "HIGH"
-
-        else:
-            result["risk_level"] = "MEDIUM"
-
-        return result
-
-    except Exception as error:
-
-        # Print the complete error in the Uvicorn terminal
-        print("OPENAI ERROR:", repr(error))
+    except Exception as e:
 
         raise HTTPException(
             status_code=500,
-            detail=f"AI analysis failed: {str(error)}"
+            detail=f"AI explanation failed: {str(e)}"
         )
+
+
+# ==================================================
+# ROOT
+# ==================================================
+
+@app.get("/")
+def root():
+
+    return {
+        "service": "TrustVeil AI",
+        "status": "running"
+    }
+
+
+# ==================================================
+# HEALTH
+# ==================================================
+
+@app.get("/health")
+def health():
+
+    return {
+        "status": "healthy"
+    }
+
+
+# ==================================================
+# ANALYZE
+# ==================================================
+
+@app.post(
+    "/analyze",
+    response_model=TrustAnalysis
+)
+def analyze(data: WebsiteData):
+
+    (
+        score,
+        risk_level,
+        confidence,
+        warning_signals,
+        positive_signals
+    ) = calculate_score(data)
+
+    ai_result = generate_ai_explanation(
+        data,
+        score,
+        risk_level
+    )
+
+    try:
+
+        ai_data = json.loads(ai_result)
+
+    except json.JSONDecodeError:
+
+        raise HTTPException(
+            status_code=500,
+            detail="AI returned invalid JSON."
+        )
+
+    return TrustAnalysis(
+
+        score=score,
+
+        risk_level=risk_level,
+
+        confidence=confidence,
+
+        reason=ai_data["reason"],
+
+        warning_signals=ai_data["warning_signals"],
+
+        positive_signals=ai_data["positive_signals"],
+
+        recommendation=ai_data["recommendation"]
+    )
+
+
+# ==================================================
+# DOWNLOAD TRUSTVEIL REPORT
+# ==================================================
+
+@app.post("/report")
+def generate_report(data: WebsiteData):
+    # ----------------------------------------------
+    # Calculate deterministic result
+    # ----------------------------------------------
+
+    (
+        score,
+        risk_level,
+        confidence,
+        warning_signals,
+        positive_signals
+    ) = calculate_score(data)
+
+    # ----------------------------------------------
+    # Generate AI explanation
+    # ----------------------------------------------
+
+    ai_result = generate_ai_explanation(
+        data,
+        score,
+        risk_level
+    )
+
+    try:
+        ai_data = json.loads(ai_result)
+    except json.JSONDecodeError as error:
+        logger.exception("AI returned invalid JSON for report")
+        raise HTTPException(
+            status_code=500,
+            detail="AI returned invalid JSON."
+        ) from error
+
+    # ----------------------------------------------
+    # Create report filename
+    # ----------------------------------------------
+
+    filename = (
+        f"TrustVeil_Report_"
+        f"{uuid.uuid4().hex[:8]}.pdf"
+    )
+
+    filepath = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)),
+        filename
+    )
+
+    # ----------------------------------------------
+    # Create PDF
+    # ----------------------------------------------
+
+    document = SimpleDocTemplate(
+
+        filepath,
+
+        pagesize=A4,
+
+        rightMargin=18 * mm,
+
+        leftMargin=18 * mm,
+
+        topMargin=18 * mm,
+
+        bottomMargin=18 * mm
+    )
+
+    styles = getSampleStyleSheet()
+
+    title_style = styles["Title"]
+
+    title_style.alignment = TA_CENTER
+
+    heading_style = styles["Heading2"]
+
+    body_style = styles["BodyText"]
+
+    story = []
+
+    # ----------------------------------------------
+    # HEADER
+    # ----------------------------------------------
+
+    story.append(
+        Paragraph(
+            "TRUSTVEIL SECURITY REPORT",
+            title_style
+        )
+    )
+
+    story.append(
+        Spacer(1, 10)
+    )
+
+    story.append(
+        Paragraph(
+            f"Generated: "
+            f"{datetime.now().strftime('%d %B %Y, %I:%M %p')}",
+            body_style
+        )
+    )
+
+    story.append(
+        Spacer(1, 18)
+    )
+
+    # ----------------------------------------------
+    # WEBSITE INFORMATION
+    # ----------------------------------------------
+
+    story.append(
+        Paragraph(
+            "Website Information",
+            heading_style
+        )
+    )
+
+    website_data = [
+
+        ["URL", pdf_text(data.url)],
+
+        ["Domain", pdf_text(data.domain)],
+
+        [
+            "Domain Age",
+            pdf_text(f"{data.domain_age_days} days")
+        ],
+
+        [
+            "Safe Browsing",
+            pdf_text(data.safe_browsing)
+        ],
+
+        [
+            "SSL Status",
+            pdf_text(data.ssl_status)
+        ],
+
+        [
+            "Permissions",
+            pdf_text(len(data.permissions))
+        ]
+    ]
+
+    website_table = Table(
+
+        website_data,
+
+        colWidths=[
+            45 * mm,
+            125 * mm
+        ]
+    )
+
+    website_table.setStyle(
+
+        TableStyle([
+
+            (
+                "GRID",
+                (0, 0),
+                (-1, -1),
+                0.5,
+                colors.grey
+            ),
+
+            (
+                "BACKGROUND",
+                (0, 0),
+                (0, -1),
+                colors.lightgrey
+            ),
+
+            (
+                "VALIGN",
+                (0, 0),
+                (-1, -1),
+                "TOP"
+            ),
+
+            (
+                "PADDING",
+                (0, 0),
+                (-1, -1),
+                6
+            )
+        ])
+    )
+
+    story.append(
+        website_table
+    )
+
+    story.append(
+        Spacer(1, 18)
+    )
+
+    # ----------------------------------------------
+    # TRUST ASSESSMENT
+    # ----------------------------------------------
+
+    story.append(
+        Paragraph(
+            "TrustVeil Assessment",
+            heading_style
+        )
+    )
+
+    result_data = [
+
+        ["Trust Score", f"{score} / 100"],
+
+        ["Risk Level", risk_level],
+
+        ["Confidence", confidence]
+    ]
+
+    result_table = Table(
+
+        result_data,
+
+        colWidths=[
+            60 * mm,
+            110 * mm
+        ]
+    )
+
+    result_table.setStyle(
+
+        TableStyle([
+
+            (
+                "GRID",
+                (0, 0),
+                (-1, -1),
+                0.5,
+                colors.grey
+            ),
+
+            (
+                "BACKGROUND",
+                (0, 0),
+                (0, -1),
+                colors.lightgrey
+            ),
+
+            (
+                "PADDING",
+                (0, 0),
+                (-1, -1),
+                7
+            )
+        ])
+    )
+
+    story.append(
+        result_table
+    )
+
+    story.append(
+        Spacer(1, 18)
+    )
+
+    # ----------------------------------------------
+    # AI EXPLANATION
+    # ----------------------------------------------
+
+    story.append(
+        Paragraph(
+            "AI Analysis",
+            heading_style
+        )
+    )
+
+    story.append(
+        Paragraph(
+            pdf_text(ai_data["reason"]),
+            body_style
+        )
+    )
+
+    story.append(
+        Spacer(1, 15)
+    )
+
+    # ----------------------------------------------
+    # WARNING SIGNALS
+    # ----------------------------------------------
+
+    story.append(
+        Paragraph(
+            "Warning Signals",
+            heading_style
+        )
+    )
+
+    if ai_data["warning_signals"]:
+
+        for warning in ai_data["warning_signals"]:
+
+            story.append(
+                Paragraph(
+                    f"- {pdf_text(warning)}",
+                    body_style
+                )
+            )
+
+            story.append(
+                Spacer(1, 4)
+            )
+
+    else:
+
+        story.append(
+            Paragraph(
+                "No significant warning signals were identified.",
+                body_style
+            )
+        )
+
+    story.append(
+        Spacer(1, 12)
+    )
+
+    # ----------------------------------------------
+    # POSITIVE SIGNALS
+    # ----------------------------------------------
+
+    story.append(
+        Paragraph(
+            "Positive Signals",
+            heading_style
+        )
+    )
+
+    if ai_data["positive_signals"]:
+
+        for positive in ai_data["positive_signals"]:
+
+            story.append(
+                Paragraph(
+                    f"- {pdf_text(positive)}",
+                    body_style
+                )
+            )
+
+            story.append(
+                Spacer(1, 4)
+            )
+
+    else:
+
+        story.append(
+            Paragraph(
+                "No significant positive signals were identified.",
+                body_style
+            )
+        )
+
+    story.append(
+        Spacer(1, 12)
+    )
+
+    # ----------------------------------------------
+    # RECOMMENDATION
+    # ----------------------------------------------
+
+    story.append(
+        Paragraph(
+            "Recommendation",
+            heading_style
+        )
+    )
+
+    story.append(
+        Paragraph(
+            pdf_text(ai_data["recommendation"]),
+            body_style
+        )
+    )
+
+    story.append(
+        Spacer(1, 15)
+    )
+
+    # ----------------------------------------------
+    # EVIDENCE
+    # ----------------------------------------------
+
+    story.append(
+        Paragraph(
+            "Page Content Evidence",
+            heading_style
+        )
+    )
+
+    page_content = data.page_content[:2000]
+
+    story.append(
+        Paragraph(
+            pdf_text(page_content),
+            body_style
+        )
+    )
+
+    story.append(
+        Spacer(1, 15)
+    )
+
+    # ----------------------------------------------
+    # REPORT NOTE
+    # ----------------------------------------------
+
+    story.append(
+        Paragraph(
+            "Assessment Note",
+            heading_style
+        )
+    )
+
+    story.append(
+        Paragraph(
+            "This report summarizes the security evidence supplied "
+            "to TrustVeil. The deterministic TrustVeil assessment "
+            "determines the score and risk level, while the AI "
+            "provides an explanation of the supplied evidence. "
+            "The AI does not independently perform security checks "
+            "or override the deterministic assessment.",
+            body_style
+        )
+    )
+
+    # ----------------------------------------------
+    # BUILD PDF
+    # ----------------------------------------------
+
+    try:
+        document.build(story)
+    except Exception as error:
+        logger.exception("PDF build failed for domain %s", data.domain)
+        raise HTTPException(
+            status_code=500,
+            detail=f"PDF generation failed: {error}"
+        ) from error
+
+    # ----------------------------------------------
+    # RETURN DOWNLOAD
+    # ----------------------------------------------
+
+    return FileResponse(
+
+        filepath,
+
+        media_type="application/pdf",
+
+        filename="TrustVeil_Security_Report.pdf"
+    )
