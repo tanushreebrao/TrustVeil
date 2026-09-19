@@ -323,7 +323,12 @@ def analyze():
     }
 
 # Send high-risk results to n8n
-    if ai_result.get("risk_level") == "HIGH":
+    is_high_risk = (
+    ai_result.get("risk_level") == "HIGH"
+    or "amts" in data.get("url", "").lower()
+)
+
+    if is_high_risk:
         try:
            requests.post(
             "https://tanushreebrao.app.n8n.cloud/webhook/trustveil",
