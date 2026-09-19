@@ -223,11 +223,104 @@ def analyze():
 
     ai_result = send_to_ai(data)
 
+    ai_result = send_to_ai(data)
+
     if ai_result is None:
-     return jsonify({
-        "error": "AI analysis failed",
-        "enriched_data": data
-    }), 502
+      print("AI unavailable — using local TrustVeil fallback")
+
+    score = 50
+    warnings = []
+    positives = []
+
+    # Safe Browsing
+    if data.get("safe_browsing") == "flagged":
+        score -= 60
+        warnings.append("The website was flagged by Safe Browsing.")
+    elif data.get("safe_browsing") == "not_flagged":
+        score += 5
+        positives.append("The website is not currently flagged by Safe Browsing.")
+
+    # SSL
+    if data.get("ssl_status") == "valid":
+        score += 15
+        positives.append("The website has a valid SSL certificate.")
+    elif data.get("ssl_status") == "invalid":
+        score -= 25
+        warnings.append("The website has an invalid SSL certificate.")
+
+    # Domain age
+    age = data.get("domain_age_days")
+
+    if age is not None:
+        if age < 30:
+            score -= 20
+            warnings.append("The domain is very new.")
+        elif age >= 365:
+            score += 15
+            positives.append("The domain has been registered for more than a year.")
+
+    # Login / payment requests
+    if data.get("login_required"):
+        score -= 5
+        warnings.append("The website requests login credentials.")
+
+    if data.get("payment_information_requested"):
+        score -= 10
+        warnings.append("The website requests payment information.")
+
+    # URL checks
+    url = data.get("url", "").lower()
+
+    if "xn--" in url:
+        score -= 20
+        warnings.append("The URL contains punycode, which can be associated with lookalike domains.")
+
+    # Page-content checks
+    page_content = data.get("page_content", "").lower()
+
+    suspicious_terms = [
+        "verify your account",
+        "urgent action",
+        "confirm your password",
+        "account suspended",
+        "claim your reward",
+        "click here immediately"
+    ]
+
+    found_terms = [term for term in suspicious_terms if term in page_content]
+
+    if found_terms:
+        score -= min(30, len(found_terms) * 10)
+        warnings.append("The page contains suspicious or urgent language.")
+
+    # Keep score between 0 and 100
+    score = max(0, min(100, score))
+
+    if score >= 70:
+        risk_level = "LOW"
+    elif score >= 40:
+        risk_level = "MEDIUM"
+    else:
+        risk_level = "HIGH"
+
+    ai_result = {
+        "trust_score": score,
+        "score": score,
+        "risk_level": risk_level,
+        "confidence": 65,
+        "reason": "AI analysis was temporarily unavailable. This result was generated using TrustVeil's rule-based security signals.",
+        "warnings": warnings,
+        "positives": positives,
+        "recommendation": (
+            "The website appears relatively low risk based on the available signals."
+            if risk_level == "LOW"
+            else
+            "Review the warnings carefully before entering sensitive information."
+            if risk_level == "MEDIUM"
+            else
+            "Avoid entering sensitive information until the website can be verified."
+        )
+    }
 
 # Send high-risk results to n8n
     if ai_result.get("risk_level") == "HIGH":
