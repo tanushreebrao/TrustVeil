@@ -224,12 +224,25 @@ def analyze():
     ai_result = send_to_ai(data)
 
     if ai_result is None:
-      return jsonify({
+     return jsonify({
         "error": "AI analysis failed",
         "enriched_data": data
     }), 502
 
-    return jsonify(ai_result)
+# Send high-risk results to n8n
+    if ai_result.get("risk_level") == "HIGH":
+        try:
+           requests.post(
+            "https://tanushreebrao.app.n8n.cloud/webhook/trustveil",
+            json={
+                "domain": data.get("domain"),
+                "trust_score": ai_result.get("trust_score"),
+                "risk_level": ai_result.get("risk_level"),
+                "confidence": ai_result.get("confidence")
+            },
+            timeout=5
+        )
+        except Exception as e:
+            print("n8n logging failed:", e)
 
-if __name__ == "__main__":
-    app.run(debug=True)
+    return jsonify(ai_result)
