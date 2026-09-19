@@ -114,7 +114,10 @@ The system then provides:
                     │ Security Log        │
                     └─────────────────────┘
 
-✨ Key Features
+
+```
+
+### ✨ Key Features
 🔍 Multi-Signal Website Analysis
 
 TrustVeil does not depend on a single security indicator. It combines multiple signals to produce a more contextual assessment.
@@ -191,7 +194,11 @@ Git
 GitHub
 GitHub Actions
 
-📁 Project Structure
+
+
+### 📁 Project Structure
+
+```text
 
 TrustVeil/
 │
@@ -216,8 +223,11 @@ TrustVeil/
 ├── test.json
 ├── .gitignore
 └── README.md
+```
 
-🔄 How TrustVeil Works
+
+
+### 🔄 How TrustVeil Works
 
 1. User visits a website
 
@@ -258,13 +268,17 @@ The Chrome extension presents the assessment through the TrustVeil interface.
 
 High-risk security events can be sent to n8n and recorded in Google Sheets.
 
-🔌 API
+
+
+### 🔌 API
 
 POST /analyze
 
 Analyzes a website using the supplied security context.
 
 Example request:
+
+```text
 
 {
   "url": "https://example.com",
@@ -274,6 +288,7 @@ Example request:
   "payment_information_requested": false
 }
 
+```
 The backend enriches the request with additional information such as:
 
 domain
@@ -283,7 +298,9 @@ ssl_status
 
 The final response contains the TrustVeil assessment.
 
-🔐 Security & Privacy
+
+
+### 🔐 Security & Privacy
 
 TrustVeil is designed around observable website and browser signals.
 
@@ -298,7 +315,9 @@ SANA_API_URL=...
 
 Never commit actual secret values to GitHub.
 
-🚀 Local Setup
+
+
+### 🚀 Local Setup
 
 1. Clone the repository
 git clone https://github.com/tanushreebrao/TrustVeil.git
@@ -324,7 +343,9 @@ Select Load unpacked.
 Select the extension folder.
 Open a website and launch TrustVeil.
 
-🔁 CI/CD
+
+
+### 🔁 CI/CD
 
 TrustVeil uses GitHub Actions to perform basic backend validation.
 
@@ -334,7 +355,9 @@ Dependencies can be installed.
 Python syntax is valid.
 Backend code can be compiled successfully.
 
-📈 Future Scope
+
+
+### 📈 Future Scope
 
 Potential future improvements include:
 
@@ -349,7 +372,9 @@ More detailed security provenance
 Improved local fallback analysis
 Expanded automated security workflows
 
-🎯 Project Vision
+
+
+### 🎯 Project Vision
 
 TrustVeil aims to make website security more understandable and contextual.
 
@@ -361,7 +386,8 @@ TrustVeil aims to answer:
 
 "What signals were observed, what do they indicate, and why should I be cautious?"
 
-👥 Team
+
+### 👥 Team
 Team VALKYRIE CORE
 
 TrustVeil — AI-Powered Web Trust Layer
