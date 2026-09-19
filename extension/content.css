@@ -1,0 +1,71 @@
+#trustveil-notification {
+    position: fixed !important;
+    right: 24px !important;
+    bottom: 24px !important;
+
+    width: 340px !important;
+    padding: 16px !important;
+
+    background: #ffffff !important;
+    color: #1f2933 !important;
+
+    border: 1px solid #e2e5e9 !important;
+    border-radius: 14px !important;
+
+    box-shadow: 0 8px 30px rgba(0, 0, 0, 0.18) !important;
+
+    font-family: Arial, sans-serif !important;
+
+    z-index: 2147483647 !important;
+
+    cursor: pointer !important;
+}
+
+#trustveil-notification .trustveil-top {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 12px;
+}
+
+#trustveil-notification .trustveil-brand {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 15px;
+    font-weight: bold;
+}
+
+#trustveil-notification .trustveil-icon {
+    width: 28px;
+    height: 28px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+
+    background: #1f2933;
+    color: white;
+
+    border-radius: 8px;
+    font-weight: bold;
+}
+
+#trustveil-notification #trustveil-close {
+    border: none !important;
+    background: none !important;
+
+    font-size: 20px !important;
+    color: #6b7280 !important;
+
+    cursor: pointer !important;
+}
+
+#trustveil-notification .trustveil-message {
+    font-size: 14px;
+    margin-bottom: 6px;
+}
+
+#trustveil-notification .trustveil-action {
+    font-size: 12px;
+    color: #6b7280;
+}
