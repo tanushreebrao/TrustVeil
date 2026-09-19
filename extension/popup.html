@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>TrustVeil</title>
+    <link rel="stylesheet" href="popup.css">
+</head>
+
+<body>
+
+    <div class="container">
+
+        <div class="header">
+            <h1>TrustVeil</h1>
+            <p>Website trust analysis - v1.0.1</p>
+        </div>
+
+        <div class="site-info">
+            <span>Current website</span>
+            <p id="siteUrl">Detecting...</p>
+        </div>
+
+        <button id="analyzeBtn">
+            Analyze this website
+        </button>
+
+        <div id="loading" class="hidden">
+            Analyzing website...
+        </div>
+
+        <div id="error" class="hidden"></div>
+
+        <div id="result" class="hidden">
+
+            <div class="score-card">
+
+                <div>
+                    <span class="label">Trust Score</span>
+                    <div id="score">--/100</div>
+                </div>
+
+                <div>
+                    <span class="label">Risk</span>
+                    <strong id="risk">--</strong>
+                </div>
+
+            </div>
+
+            <div class="confidence">
+                Confidence: <strong id="confidence">--</strong>
+            </div>
+
+            <div class="section">
+                <h3>Assessment</h3>
+                <p id="reason"></p>
+            </div>
+
+            <div class="section">
+                <h3>Warning signs</h3>
+                <ul id="warnings"></ul>
+            </div>
+
+            <div class="section">
+                <h3>Positive signs</h3>
+                <ul id="positives"></ul>
+            </div>
+
+            <div class="section">
+                <h3>Recommendation</h3>
+                <p id="recommendation"></p>
+            </div>
+
+        </div>
+
+    </div>
+
+    <script src="popup.js"></script>
+
+</body>
+</html>
